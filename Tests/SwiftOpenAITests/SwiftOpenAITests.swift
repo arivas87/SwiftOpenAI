@@ -2,10 +2,9 @@ import XCTest
 @testable import SwiftOpenAI
 
 final class SwiftOpenAITests: XCTestCase {
+    private var apiKey = ProcessInfo.processInfo.environment["API_KEY"]!
+    
     func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct
-        // results.
-        XCTAssertEqual(SwiftOpenAI().text, "Hello, World!")
+        let openAI = SwiftOpenAI(apiKey)
     }
 }
