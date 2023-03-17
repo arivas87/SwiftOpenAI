@@ -5,17 +5,16 @@ import OSLog
 public class SwiftOpenAI {
     
     public typealias StreamResponse = AsyncCompactMapSequence<AsyncLineSequence<URLSession.AsyncBytes>, Data>
+    public typealias ChatStreamResponse = AsyncCompactMapSequence<AsyncThrowingMapSequence<StreamResponse, ChatResponse<ChatDeltaChoice>>, String>
     
     private let apiKey: String
     
     private let session = URLSession.shared
     private let baseUrl = URL(string: "https://api.openai.com/v1")!
     
-    private static let name = "GPT"
-    
     public var model: Model?
     public var temperature = 0
-    public var maxTokens = 7
+    public var maxTokens = 20
     
     /// The only available `init` method because token it is a required parameter to interact with the API
     /// - Parameter apiKey: API key provided by the API and avaible in your user settings when register on platform
@@ -29,6 +28,18 @@ public class SwiftOpenAI {
         "Content-Type": "application/json"
     ]}
     
+    private var history: [Message] = []
+    
+    public func clearHistory() { history.removeAll() }
+    
+    private func add(message: Message) {
+        history.append(message)
+    }
+    
+    public func historical() -> [String] {
+        history.compactMap(\.content)
+    }
+    
     private func request(to endPoint: EndPoint, withBody body: Codable, stream: Bool = false) throws -> URLRequest {
         let model = self.model ?? endPoint.models.first! // Use default model if not defined
         
@@ -37,27 +48,25 @@ public class SwiftOpenAI {
             body: body)
         
         var request = URLRequest(url: baseUrl.appendingPathComponent(endPoint.folder, isDirectory: false))
-        print("Request: \(request.url!)")
+        Logger.network.debug("Request: \(request.url!)")
         request.httpMethod = "POST"
         request.allHTTPHeaderFields = headers
-        request.httpBody = try encoder.encode(requestBody)
-        print("Body: \(String(data: request.httpBody!, encoding: .utf8)!)")
-        Log.network.info("Body: \(String(data: request.httpBody!, encoding: .utf8)!)")
+        request.httpBody = try JSONEncoder.api.encode(requestBody)
+        Logger.network.info("Body: \(String(data: request.httpBody!, encoding: .utf8)!)")
         
         return request
     }
     
-    func stream(endPoint: EndPoint, withBody body: Codable) async throws -> StreamResponse {
+    private func stream(endPoint: EndPoint, withBody body: Codable) async throws -> StreamResponse {
         let request = try request(to: endPoint, withBody: body, stream: true)
         
         let (result, response) = try await session.bytes(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse else { throw GPTError.invalidURLReponseType }
+        guard let httpResponse = response as? HTTPURLResponse else { throw APIError.invalidURLReponseType }
 
         switch httpResponse.statusCode {
         case 200: return result.lines.compactMap({ line in
-            print("Response: \(line)")
-            Log.network.info("Response: \(line)")
+            Logger.network.debug("Response: \(line)")
             guard !line.contains("[DONE]") else { return nil }
             return line.hasPrefix("data: ") ? line.dropFirst(6).data(using: .utf8) : nil
         })
@@ -66,29 +75,26 @@ public class SwiftOpenAI {
             for try await line in result.lines {
                 errorText += line
             }
-            print("Error code: \(httpResponse.statusCode), Error: \(errorText)")
-            Log.network.error("Error code: \(httpResponse.statusCode), Error: \(errorText)")
-            throw GPTError.responseError(statusCode: httpResponse.statusCode, description: errorText)
+            Logger.network.error("Error code: \(httpResponse.statusCode), Error: \(errorText)")
+            throw APIError.responseError(statusCode: httpResponse.statusCode, description: errorText)
         }
     }
     
-    func call(endPoint: EndPoint, withBody body: Codable) async throws -> Data {
+    private func call(endPoint: EndPoint, withBody body: Codable) async throws -> Data {
         let request = try request(to: endPoint, withBody: body)
         
         let (data, response) = try await session.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse else { throw GPTError.invalidURLReponseType }
+        guard let httpResponse = response as? HTTPURLResponse else { throw APIError.invalidURLReponseType }
 
         switch httpResponse.statusCode {
         case 200:
-            print("Response: \(String(data: data, encoding: .utf8)!)")
-            Log.network.info("Response: \(String(data: data, encoding: .utf8)!)")
+            Logger.network.debug("Response: \(String(data: data, encoding: .utf8)!)")
             return data
         default:
             let errorText = String(data: data, encoding: .utf8) ?? ""
-            print("Error code: \(httpResponse.statusCode), Error: \(errorText)")
-            Log.network.error("Error code: \(httpResponse.statusCode), Error: \(errorText)")
-            throw GPTError.responseError(statusCode: httpResponse.statusCode, description: errorText)
+            Logger.network.error("Error code: \(httpResponse.statusCode), Error: \(errorText)")
+            throw APIError.responseError(statusCode: httpResponse.statusCode, description: errorText)
         }
     }
 
@@ -127,24 +133,45 @@ public class SwiftOpenAI {
         let totalTokens: Int
     }
     
-    enum GPTError: LocalizedError {
+    enum APIError: LocalizedError {
         case invalidURLReponseType
         case responseError(statusCode: Int, description: String?)
     }
+
+    // MARK: - Chats
     
-    struct Log {
-        static let network = Logger(subsystem: name, category: "network")
+    public func chat(_ text: String) async throws -> String {
+        let message = Message(content: text)
+        let data = try await call(endPoint: .chats, withBody: ChatBody(messages: history + [message]))
+        let response = try JSONDecoder.api.decode(ChatResponse<ChatChoice>.self, from: data)
+        
+        guard let choice = response.choices.first else { throw ChatError.noChoices }
+        guard let text = choice.message.content else { throw ChatError.noText(in: choice) }
+        add(message: message)
+        return text
     }
     
-    lazy var decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return decoder
-    }()
+    public func chatStream(_ text: String) async throws -> ChatStreamResponse {
+        let message = Message(content: text)
+        return try await stream(endPoint: .chats, withBody: ChatBody(messages: history + [message]))
+            .map({ try JSONDecoder.api.decode(ChatResponse<ChatDeltaChoice>.self, from: $0) })
+            .compactMap({
+                guard let choice = $0.choices.first else { return nil }
+                guard let text = choice.delta.content else { return nil }
+                self.add(message: message)
+                return text
+            })
+    }
     
-    lazy var encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        return encoder
-    }()
+    // MARK: - Completion
+    
+    public func complete(_ prompt: String) async throws -> CompletionResponse {
+        let data = try await call(endPoint: .completions, withBody: CompletionBody(prompt: prompt))
+        return try JSONDecoder.api.decode(CompletionResponse.self, from: data)
+    }
+    
+    public func completeStream(_ prompt: String) async throws -> AsyncThrowingMapSequence<StreamResponse, CompletionResponse> {
+        try await stream(endPoint: .completions, withBody: CompletionBody(prompt: prompt))
+            .map({ try JSONDecoder.api.decode(CompletionResponse.self, from: $0) })
+    }
 }

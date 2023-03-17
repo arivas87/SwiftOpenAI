@@ -33,15 +33,10 @@ extension SwiftOpenAI {
         
         public var content: String? { delta.content }
     }
-
-    public func chat(_ text: String) async throws -> ChatResponse<ChatChoice> {
-        let data = try await call(endPoint: .chats, withBody: ChatBody(messages: [Message(content: text)]))
-        return try decoder.decode(ChatResponse.self, from: data)
-    }
     
-    public func chatStream(_ text: String) async throws -> AsyncThrowingMapSequence<StreamResponse, ChatResponse<ChatDeltaChoice>> {
-        try await stream(endPoint: .chats, withBody: ChatBody(messages: [Message(content: text)]))
-            .map({ try self.decoder.decode(ChatResponse.self, from: $0) })
+    enum ChatError: LocalizedError {
+        case noChoices
+        case noText(in: Contentable)
     }
 }
 
