@@ -13,8 +13,8 @@ public class SwiftOpenAI {
     private let baseUrl = URL(string: "https://api.openai.com/v1")!
     
     public var model: Model?
-    public var temperature = 0
-    public var maxTokens = 20
+    public var temperature: Int?
+    public var maxTokens: Int?
     
     /// The only available `init` method because token it is a required parameter to interact with the API
     /// - Parameter apiKey: API key provided by the API and avaible in your user settings when register on platform
@@ -108,8 +108,8 @@ public class SwiftOpenAI {
     
     struct RequestBody: Encodable {
         let model: Model
-        let maxTokens: Int
-        let temperature: Int
+        let maxTokens: Int?
+        let temperature: Int?
         let stream: Bool
         let body: Codable
         
@@ -120,8 +120,8 @@ public class SwiftOpenAI {
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(model.id, forKey: .model)
-            try container.encode(maxTokens, forKey: .maxTokens)
-            try container.encode(temperature, forKey: .temperature)
+            try container.encodeIfPresent(maxTokens, forKey: .maxTokens)
+            try container.encodeIfPresent(temperature, forKey: .temperature)
             try container.encode(stream, forKey: .stream)
             try body.encode(to: encoder)
         }
