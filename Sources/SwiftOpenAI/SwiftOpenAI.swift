@@ -32,14 +32,6 @@ public class SwiftOpenAI {
     
     public func clearHistory() { history.removeAll() }
     
-    private func add(message: Message) {
-        history.append(message)
-    }
-    
-    public func historical() -> [String] {
-        history.compactMap(\.content)
-    }
-    
     private func request(to endPoint: EndPoint, withBody body: Codable, stream: Bool = false) throws -> URLRequest {
         let model = self.model ?? endPoint.models.first! // Use default model if not defined
         
@@ -147,20 +139,26 @@ public class SwiftOpenAI {
         
         guard let choice = response.choices.first else { throw ChatError.noChoices }
         guard let text = choice.message.content else { throw ChatError.noText(in: choice) }
-        add(message: message)
+        history.append(message)
         return text
     }
     
     public func chatStream(_ text: String) async throws -> ChatStreamResponse {
         let message = Message(content: text)
-        return try await stream(endPoint: .chats, withBody: ChatBody(messages: history + [message]))
-            .map({ try JSONDecoder.api.decode(ChatResponse<ChatDeltaChoice>.self, from: $0) })
-            .compactMap({
-                guard let choice = $0.choices.first else { return nil }
-                guard let text = choice.delta.content else { return nil }
-                self.add(message: message)
-                return text
-            })
+        history.append(message)
+        
+        do {
+            return try await stream(endPoint: .chats, withBody: ChatBody(messages: history + [message]))
+                .map({ try JSONDecoder.api.decode(ChatResponse<ChatDeltaChoice>.self, from: $0) })
+                .compactMap({
+                    guard let choice = $0.choices.first else { return nil }
+                    guard let text = choice.delta.content else { return nil }
+                    return text
+                })
+        } catch {
+            history.removeLast()
+            throw error
+        }
     }
     
     // MARK: - Completion
