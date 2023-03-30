@@ -12,9 +12,7 @@ public class SwiftOpenAI {
     private let session = URLSession.shared
     private let baseUrl = URL(string: "https://api.openai.com/v1")!
     
-    public var model: Model?
-    public var temperature: Int?
-    public var maxTokens: Int?
+    public var configuration: Configuration = .standard
     
     /// The only available `init` method because token it is a required parameter to interact with the API
     /// - Parameter apiKey: API key provided by the API and avaible in your user settings when register on platform
@@ -33,10 +31,13 @@ public class SwiftOpenAI {
     public func clearHistory() { history.removeAll() }
     
     private func request(to endPoint: EndPoint, withBody body: Codable, stream: Bool = false) throws -> URLRequest {
-        let model = self.model ?? endPoint.models.first! // Use default model if not defined
+        let model = configuration.model ?? endPoint.models.first! // Use default model if not defined
         
         let requestBody = RequestBody(
-            model: model, maxTokens: maxTokens, temperature: temperature, stream: stream,
+            model: model,
+            maxTokens: configuration.maxTokens,
+            temperature: configuration.temperature,
+            stream: stream,
             body: body)
         
         var request = URLRequest(url: baseUrl.appendingPathComponent(endPoint.folder, isDirectory: false))
